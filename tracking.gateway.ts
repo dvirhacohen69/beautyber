@@ -142,7 +142,7 @@ async function handleLocationUpdate(socket: Socket, bookingId: string, payload: 
 
 /**
  * סוגר את ערוץ המעקב של הזמנה — נקרא ע"י booking.service ברגע שההזמנה
- * עוברת לסטטוס סופי (completed/cancelled_*/no_show). מנתק את כל
+ * עוברת לסטטוס סופי (completed/cancelled/no_show). מנתק את כל
  * המשתתפים ומודיע להם על הסגירה, כדי שהאפליקציות ידעו להפסיק להאזין.
  */
 export function closeTrackingRoom(bookingId: string): void {

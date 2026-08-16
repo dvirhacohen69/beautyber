@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: beauty-on-demand-backend
+    env: node
+    plan: free
+    buildCommand: npm install && npx prisma generate && npx prisma migrate deploy && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_BASE_PATH
+        value: /v1
+      - key: DATABASE_URL
+        sync: false # מלא ידנית ב-Dashboard: מחרוזת החיבור מ-Supabase
+      - key: REDIS_URL
+        sync: false # מלא ידנית ב-Dashboard: מחרוזת החיבור מ-Upstash
+      - key: JWT_ACCESS_SECRET
+        generateValue: true # Render מייצר סוד אקראי בטוח אוטומטית
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: "*" # אפליקציית מובייל לא כפופה ל-CORS כמו דפדפן - אפשר להשאיר פתוח
+      - key: PLATFORM_COMMISSION_RATE
+        value: "0.2"

@@ -1,0 +1,439 @@
+// ============================================================================
+// Beauty On-Demand — Prisma Schema
+// כולל את כל 17 הטבלאות שהוגדרו בשלב 2 (ERD)
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  client
+  provider
+  admin
+}
+
+enum UserStatus {
+  active
+  suspended
+  pending
+  blocked
+}
+
+enum KycStatus {
+  pending
+  approved
+  rejected
+  resubmit
+}
+
+enum DayOfWeek {
+  SUN
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+}
+
+enum BookingStatus {
+  pending
+  confirmed
+  provider_en_route
+  arrived
+  in_progress
+  completed
+  cancelled_client
+  cancelled_provider
+  no_show
+}
+
+enum CancelledBy {
+  client
+  provider
+  admin
+}
+
+enum PreAuthStatus {
+  held
+  captured
+  released
+  failed
+}
+
+enum PayoutStatus {
+  pending
+  processing
+  paid
+  failed
+}
+
+enum DiscountType {
+  percentage
+  fixed
+}
+
+// ============================================================================
+// USERS  (בסיס משותף ל-client / provider / admin)
+// ============================================================================
+
+model User {
+  userId          String     @id @default(uuid()) @map("user_id") @db.Uuid
+  role            UserRole
+  fullName        String     @map("full_name") @db.VarChar(120)
+  phoneNumber     String     @unique @map("phone_number") @db.VarChar(20)
+  email           String?    @unique @db.VarChar(150)
+  passwordHash    String?    @map("password_hash") @db.VarChar(255)
+  profileImageUrl String?    @map("profile_image_url")
+  status          UserStatus @default(pending)
+  trustScore      Decimal    @default(5.00) @map("trust_score") @db.Decimal(3, 2)
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+  lastLoginAt     DateTime?  @map("last_login_at")
+
+  // Relations
+  providerProfile   Provider?
+  savedAddresses    SavedAddress[]
+  clientBookings    Booking[]        @relation("ClientBookings")
+  paymentMethods    PaymentMethod[]
+  paymentsAsClient  Payment[]        @relation("ClientPayments")
+  reviewsWritten    Review[]         @relation("ClientReviews")
+  notifications     Notification[]
+  statusChangesMade BookingStatusLog[] @relation("StatusChangedBy")
+  kycApprovalsMade  Provider[]       @relation("ApprovedByAdmin")
+
+  @@map("users")
+}
+
+// ============================================================================
+// PROVIDERS  (הרחבה ל-User עם role = 'provider')
+// ============================================================================
+
+model Provider {
+  providerId             String    @id @default(uuid()) @map("provider_id") @db.Uuid
+  userId                 String    @unique @map("user_id") @db.Uuid
+  businessName            String?   @map("business_name") @db.VarChar(150)
+  bio                     String?
+  kycStatus                KycStatus @default(pending) @map("kyc_status")
+  idDocumentUrl            String    @map("id_document_url")
+  licenseDocumentUrl       String?   @map("license_document_url")
+  serviceRadiusKm          Decimal   @map("service_radius_km") @db.Decimal(5, 2)
+  baseLocationLat          Decimal   @map("base_location_lat") @db.Decimal(9, 6)
+  baseLocationLng          Decimal   @map("base_location_lng") @db.Decimal(9, 6)
+  averageRating            Decimal   @default(0) @map("average_rating") @db.Decimal(3, 2)
+  totalReviews             Int       @default(0) @map("total_reviews")
+  isOnline                 Boolean   @default(false) @map("is_online")
+  cancellationCountMonth    Int       @default(0) @map("cancellation_count_month")
+  bankAccountDetails        String?   @map("bank_account_details") // מוצפן ברמת אפליקציה (AES-256)
+  approvedByAdminId        String?   @map("approved_by_admin_id") @db.Uuid
+  approvedAt                DateTime? @map("approved_at")
+
+  // Relations
+  user             User                 @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  approvedByAdmin  User?                @relation("ApprovedByAdmin", fields: [approvedByAdminId], references: [userId])
+  services         ProviderService[]
+  availability     ProviderAvailability[]
+  portfolioImages  PortfolioImage[]
+  bookings         Booking[]            @relation("ProviderBookings")
+  payouts          Payout[]
+  reviews          Review[]             @relation("ProviderReviews")
+
+  @@index([kycStatus])
+  @@index([isOnline])
+  @@map("providers")
+}
+
+// ============================================================================
+// SERVICE CATEGORIES
+// ============================================================================
+
+model ServiceCategory {
+  categoryId              String   @id @default(uuid()) @map("category_id") @db.Uuid
+  name                     String   @db.VarChar(100)
+  iconUrl                  String?  @map("icon_url")
+  minPrice                 Decimal  @map("min_price") @db.Decimal(8, 2)
+  maxPrice                 Decimal  @map("max_price") @db.Decimal(8, 2)
+  defaultDurationMinutes    Int      @map("default_duration_minutes")
+  isActive                  Boolean  @default(true) @map("is_active")
+
+  // Relations
+  providerServices ProviderService[]
+
+  @@map("service_categories")
+}
+
+// ============================================================================
+// PROVIDER SERVICES  (Many-to-Many: Provider <-> ServiceCategory)
+// ============================================================================
+
+model ProviderService {
+  providerServiceId String   @id @default(uuid()) @map("provider_service_id") @db.Uuid
+  providerId         String   @map("provider_id") @db.Uuid
+  categoryId         String   @map("category_id") @db.Uuid
+  customPrice        Decimal  @map("custom_price") @db.Decimal(8, 2)
+  durationMinutes    Int      @map("duration_minutes")
+  isActive           Boolean  @default(true) @map("is_active")
+
+  // Relations
+  provider Provider        @relation(fields: [providerId], references: [providerId], onDelete: Cascade)
+  category ServiceCategory @relation(fields: [categoryId], references: [categoryId])
+  bookings Booking[]
+
+  @@unique([providerId, categoryId])
+  @@map("provider_services")
+}
+
+// ============================================================================
+// PROVIDER AVAILABILITY
+// ============================================================================
+
+model ProviderAvailability {
+  availabilityId String     @id @default(uuid()) @map("availability_id") @db.Uuid
+  providerId     String     @map("provider_id") @db.Uuid
+  dayOfWeek      DayOfWeek? @map("day_of_week")
+  startTime      DateTime?  @map("start_time") @db.Time()
+  endTime        DateTime?  @map("end_time") @db.Time()
+  isBlocked      Boolean    @default(false) @map("is_blocked")
+  blockedDate    DateTime?  @map("blocked_date") @db.Date
+
+  // Relations
+  provider Provider @relation(fields: [providerId], references: [providerId], onDelete: Cascade)
+
+  @@index([providerId])
+  @@map("provider_availability")
+}
+
+// ============================================================================
+// SAVED ADDRESSES
+// ============================================================================
+
+model SavedAddress {
+  addressId       String  @id @default(uuid()) @map("address_id") @db.Uuid
+  userId          String  @map("user_id") @db.Uuid
+  label           String  @db.VarChar(50)
+  lat             Decimal @db.Decimal(9, 6)
+  lng             Decimal @db.Decimal(9, 6)
+  fullAddressText String  @map("full_address_text")
+  isDefault       Boolean @default(false) @map("is_default")
+
+  // Relations
+  user     User      @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  bookings Booking[]
+
+  @@map("saved_addresses")
+}
+
+// ============================================================================
+// BOOKINGS  (ליבת המערכת)
+// ============================================================================
+
+model Booking {
+  bookingId           String        @id @default(uuid()) @map("booking_id") @db.Uuid
+  clientId             String        @map("client_id") @db.Uuid
+  providerId           String        @map("provider_id") @db.Uuid
+  providerServiceId    String        @map("provider_service_id") @db.Uuid
+  addressId            String        @map("address_id") @db.Uuid
+  scheduledStartTime   DateTime      @map("scheduled_start_time")
+  estimatedEndTime     DateTime      @map("estimated_end_time")
+  status               BookingStatus @default(pending)
+  basePrice            Decimal       @map("base_price") @db.Decimal(8, 2)
+  distanceFee          Decimal       @map("distance_fee") @db.Decimal(8, 2)
+  surgeMultiplier      Decimal       @default(1.00) @map("surge_multiplier") @db.Decimal(3, 2)
+  totalPrice           Decimal       @map("total_price") @db.Decimal(8, 2)
+  couponId             String?       @map("coupon_id") @db.Uuid
+  cancellationReason   String?       @map("cancellation_reason")
+  cancelledBy          CancelledBy?  @map("cancelled_by")
+  createdAt            DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  client          User               @relation("ClientBookings", fields: [clientId], references: [userId])
+  provider        Provider           @relation("ProviderBookings", fields: [providerId], references: [providerId])
+  providerService ProviderService    @relation(fields: [providerServiceId], references: [providerServiceId])
+  address         SavedAddress       @relation(fields: [addressId], references: [addressId])
+  coupon          Coupon?            @relation(fields: [couponId], references: [couponId])
+  payment         Payment?
+  review          Review?
+  statusLogs      BookingStatusLog[]
+
+  @@index([clientId])
+  @@index([providerId])
+  @@index([status])
+  @@index([scheduledStartTime])
+  @@map("bookings")
+}
+
+// ============================================================================
+// BOOKING STATUS LOG  (Audit Trail)
+// ============================================================================
+
+model BookingStatusLog {
+  logId            String   @id @default(uuid()) @map("log_id") @db.Uuid
+  bookingId        String   @map("booking_id") @db.Uuid
+  status           String   @db.VarChar(30)
+  changedByUserId  String   @map("changed_by_user_id") @db.Uuid
+  lat              Decimal? @db.Decimal(9, 6)
+  lng              Decimal? @db.Decimal(9, 6)
+  timestamp        DateTime @default(now())
+
+  // Relations
+  booking       Booking @relation(fields: [bookingId], references: [bookingId], onDelete: Cascade)
+  changedByUser User    @relation("StatusChangedBy", fields: [changedByUserId], references: [userId])
+
+  @@index([bookingId])
+  @@map("booking_status_log")
+}
+
+// ============================================================================
+// PAYMENTS
+// ============================================================================
+
+model Payment {
+  paymentId             String        @id @default(uuid()) @map("payment_id") @db.Uuid
+  bookingId             String        @unique @map("booking_id") @db.Uuid
+  clientId              String        @map("client_id") @db.Uuid
+  paymentMethodId       String        @map("payment_method_id") @db.Uuid
+  preAuthStatus         PreAuthStatus @default(held) @map("pre_auth_status")
+  preAuthAmount         Decimal       @map("pre_auth_amount") @db.Decimal(8, 2)
+  capturedAmount        Decimal?      @map("captured_amount") @db.Decimal(8, 2)
+  tipAmount             Decimal       @default(0) @map("tip_amount") @db.Decimal(8, 2)
+  platformCommission    Decimal       @map("platform_commission") @db.Decimal(8, 2)
+  providerNetAmount     Decimal       @map("provider_net_amount") @db.Decimal(8, 2)
+  currency               String        @default("ILS") @db.VarChar(3)
+  gatewayTransactionId  String        @map("gateway_transaction_id") @db.VarChar(150)
+  createdAt              DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  booking       Booking       @relation(fields: [bookingId], references: [bookingId])
+  client        User          @relation("ClientPayments", fields: [clientId], references: [userId])
+  paymentMethod PaymentMethod @relation(fields: [paymentMethodId], references: [paymentMethodId])
+
+  @@map("payments")
+}
+
+// ============================================================================
+// PAYMENT METHODS
+// ============================================================================
+
+model PaymentMethod {
+  paymentMethodId String  @id @default(uuid()) @map("payment_method_id") @db.Uuid
+  userId          String  @map("user_id") @db.Uuid
+  cardToken       String  @map("card_token") @db.VarChar(255) // טוקן מהסליקה בלבד, לא נתוני כרטיס גולמיים
+  cardLast4       String  @map("card_last4") @db.VarChar(4)
+  cardBrand       String  @map("card_brand") @db.VarChar(20)
+  isDefault       Boolean @default(false) @map("is_default")
+
+  // Relations
+  user     User      @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  payments Payment[]
+
+  @@map("payment_methods")
+}
+
+// ============================================================================
+// PAYOUTS  (תשלומים לספקים)
+// ============================================================================
+
+model Payout {
+  payoutId     String       @id @default(uuid()) @map("payout_id") @db.Uuid
+  providerId   String       @map("provider_id") @db.Uuid
+  periodStart  DateTime     @map("period_start") @db.Date
+  periodEnd    DateTime     @map("period_end") @db.Date
+  totalAmount  Decimal      @map("total_amount") @db.Decimal(10, 2)
+  status       PayoutStatus @default(pending)
+  paidAt       DateTime?    @map("paid_at")
+
+  // Relations
+  provider Provider @relation(fields: [providerId], references: [providerId])
+
+  @@index([providerId])
+  @@map("payouts")
+}
+
+// ============================================================================
+// REVIEWS
+// ============================================================================
+
+model Review {
+  reviewId       String   @id @default(uuid()) @map("review_id") @db.Uuid
+  bookingId      String   @unique @map("booking_id") @db.Uuid
+  clientId       String   @map("client_id") @db.Uuid
+  providerId     String   @map("provider_id") @db.Uuid
+  rating         Int      @db.SmallInt // 1-5, אכיפה נוספת ב-CHECK constraint / application layer
+  comment        String?
+  providerReply  String?  @map("provider_reply")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  booking  Booking  @relation(fields: [bookingId], references: [bookingId])
+  client   User     @relation("ClientReviews", fields: [clientId], references: [userId])
+  provider Provider @relation("ProviderReviews", fields: [providerId], references: [providerId])
+
+  @@index([providerId])
+  @@map("reviews")
+}
+
+// ============================================================================
+// PORTFOLIO IMAGES
+// ============================================================================
+
+model PortfolioImage {
+  imageId    String @id @default(uuid()) @map("image_id") @db.Uuid
+  providerId String @map("provider_id") @db.Uuid
+  imageUrl   String @map("image_url")
+  sortOrder  Int    @map("sort_order")
+
+  // Relations
+  provider Provider @relation(fields: [providerId], references: [providerId], onDelete: Cascade)
+
+  @@index([providerId])
+  @@map("portfolio_images")
+}
+
+// ============================================================================
+// COUPONS
+// ============================================================================
+
+model Coupon {
+  couponId       String       @id @default(uuid()) @map("coupon_id") @db.Uuid
+  code           String       @unique @db.VarChar(30)
+  discountType   DiscountType @map("discount_type")
+  discountValue  Decimal      @map("discount_value") @db.Decimal(8, 2)
+  validFrom      DateTime     @map("valid_from")
+  validUntil     DateTime     @map("valid_until")
+  usageLimit     Int?         @map("usage_limit")
+  timesUsed      Int          @default(0) @map("times_used")
+
+  // Relations
+  bookings Booking[]
+
+  @@map("coupons")
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+model Notification {
+  notificationId String   @id @default(uuid()) @map("notification_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  type           String   @db.VarChar(50)
+  payload        Json
+  isRead         Boolean  @default(false) @map("is_read")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
